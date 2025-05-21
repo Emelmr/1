@@ -1,0 +1,1611 @@
+// ==UserScript==
+// @name         LBS
+// @namespace    http://tampermonkey.net/
+// @version      0.137a
+// @description  try to take over the world!
+// @author       You
+// @match        https://littlebigsnake.com/
+// @icon         https://www.google.com/s2/favicons?domain=littlebigsnake.com
+// @require      https://openuserjs.org/src/libs/sizzle/GM_config.js
+// @grant        none
+// ==/UserScript==
+
+
+window.index =0
+let ctx, serverinfo=''
+let topplayers=[]
+let pinginterval
+window.ctx = ctx
+APP.onClientReady= new Proxy(APP.onClientReady, {
+    apply:(target, thisArg, args)=>{
+        setCanvas()
+        return target.apply(thisArg, args)
+    }
+})
+function getTextColor(flags){
+    switch(flags){
+        case 1:
+            return '#7FFF00'
+            break
+        case 2:
+
+            return '#FFD700'
+            break
+        case 4:
+        case 5:
+            return '#FF00FF'
+            break
+        default:
+            return 'white'
+    }
+}
+
+
+// Construct a table with table[i] as the length of the longest prefix of the substring 0..i
+window.longestPrefix = function longestPrefix(str) {
+
+    // create a table of size equal to the length of `str`
+    // table[i] will store the prefix of the longest prefix of the substring str[0..i]
+    var table = new Array(str.length);
+    var maxPrefix = 0;
+    // the longest prefix of the substring str[0] has length
+    table[0] = 0;
+
+    // for the substrings the following substrings, we have two cases
+    for (var i = 1; i < str.length; i++) {
+        // case 1. the current character doesn't match the last character of the longest prefix
+        while (maxPrefix > 0 && str[i] !== str[maxPrefix]) {
+            // if that is the case, we have to backtrack, and try find a character  that will be equal to the current character
+            // if we reach 0, then we couldn't find a chracter
+            maxPrefix = table[maxPrefix - 1];
+        }
+        // case 2. The last character of the longest prefix matches the current character in `str`
+        if (str[maxPrefix] === str[i]) {
+            // if that is the case, we know that the longest prefix at position i has one more character.
+            // for example consider `-` be any character not contained in the set [a-c]
+            // str = abc----abc
+            // consider `i` to be the last character `c` in `str`
+            // maxPrefix = will be 2 (the first `c` in `str`)
+            // maxPrefix now will be 3
+            maxPrefix++;
+            // so the max prefix for table[9] is 3
+        }
+        table[i] = maxPrefix;
+    }
+
+    return table;
+}
+
+// Find all the patterns that matches in a given string `str`
+// this algorithm is based on the Knuth–Morris–Pratt algorithm. Its beauty consists in that it performs the matching in O(n)
+window.kmpMatching = function kmpMatching(str, pattern) {
+    // find the prefix table in O(n)
+    var prefixes = longestPrefix(pattern);
+    var matches = [];
+
+    // `j` is the index in `P`
+    var j = 0;
+    // `i` is the index in `S`
+    var i = 0;
+    while (i < str.length) {
+        // Case 1.  S[i] == P[j] so we move to the next index in `S` and `P`
+        if (str[i] === pattern[j]) {
+            i++;
+            j++;
+        }
+        // Case 2.  `j` is equal to the length of `P`
+        // that means that we reached the end of `P` and thus we found a match
+        if (j === pattern.length) {
+            matches.push(i-j);
+            // Next we have to update `j` because we want to save some time
+            // instead of updating to j = 0 , we can jump to the last character of the longest prefix well known so far.
+            // j-1 means the last character of `P` because j is actually `P.length`
+            // e.g.
+            // S =  a b a b d e
+            // P = `a b`a b
+            // we will jump to `a b` and we will compare d and a in the next iteration
+            // a b a b `d` e
+            //     a b `a` b
+            j = prefixes[j-1];
+        }
+        // Case 3.
+        // S[i] != P[j] There's a mismatch!
+        else if (str[i] !== pattern[j]) {
+            // if we have found at least a character in common, do the same thing as in case 2
+            if (j !== 0) {
+                j = prefixes[j-1];
+            } else {
+                // otherwise, j = 0, and we can move to the next character S[i+1]
+                i++;
+            }
+        }
+    }
+
+    return matches;
+}
+
+function drawCanvas2(){
+    ctx.clearRect(0,0, ctx.canvas.width, ctx.canvas.height);
+    ctx.font = "18pt Arial";
+    const text_info = ctx.measureText(serverinfo);
+    const height = ctx.font.match(/\d+/).pop() || 10;
+    const width = text_info.width
+    ctx.fillStyle ="rgba(0, 0, 0, 0.5)"
+    ctx.fillRect(20, 200, width, height)
+    ctx.fillStyle ='white';
+    ctx.textBaseline = "top";
+    ctx.textAlign = "start";
+    ctx.fillText(serverinfo, 20, 200);
+
+    ctx.font = "14pt Arial";
+    var x = 20
+    var y = 250
+    var lineheight = 25;
+    ctx.fillStyle ='white';
+    for (var i = 0; i<topplayers.length; i++){
+        ctx.textAlign = "left";
+        ctx.fillStyle = getTextColor(topplayers[i].flags)
+        ctx.fillText(topplayers[i].place, x, y + (i*lineheight));
+
+        ctx.textAlign = "start";
+
+        ctx.fillText(topplayers[i].name, x + 40, y + (i*lineheight));
+        ctx.fillText(topplayers[i].accountId.toLocaleString(), x + 200, y + (i*lineheight));
+        ctx.fillText(topplayers[i].id, x + 350, y + (i*lineheight));
+    }
+
+    requestAnimationFrame(drawCanvas2)
+}
+
+const setCanvas = ()=>{
+
+    var canvas = document.createElement('canvas')
+    const _width = 900
+    let _heigth = 900 // (_width*9)/16
+    canvas.id = 'canvas2'
+    canvas.style = 'width: 100%; height: 100%;position:relative; display:none;  top: 0;left: 0;position: absolute;z-index:0;  pointer-events: none;'
+    var gamecanvas =document.getElementById('canvas')
+    // gamecanvas.style=`position:absolute;width: ${_width}px;height: ${_heigth}px;left: 50%;top: 50%;margin-left: -${_width/2}px;margin-top: -${_heigth/2}px;`
+    gamecanvas.style.zIndex=1000
+    ctx = canvas.getContext('2d')
+    ctx.canvas.width  = window.innerWidth
+    ctx.canvas.height = window.innerHeight
+    gamecanvas.parentElement.appendChild(canvas)
+    //   document.body.appendChild(canvas)
+    window.addEventListener('resize', () => {
+        canvas.width = window.innerWidth
+        canvas.height = window.innerHeight
+
+    })
+    requestAnimationFrame(drawCanvas2)
+}
+
+const wsinstances = { master: {}, chat: {}, game: {} }
+const onbinary = 5670
+let mypos = {x:0, y:0}
+
+const processCopy = (array)=>{
+    worker.postMessage({ byteArray: array }, [array])
+    //console.log(data.length)
+}
+WebSocket = new Proxy(WebSocket, {
+    construct: (target, args) => {
+        var _url = args[0].replace('8080', '8443')
+        args[0] = _url
+        if(_url == 'wss://master.littlebigsnake.com:8443/'){
+            //  args[0] = 'wss://viper.neodinamika.com:8443/'
+        }
+        let instance = new target(...args)
+        switch (_url) {
+            case 'wss://master.littlebigsnake.com:8443/':
+            case 'wss://viper.neodinamika.com:8443/':
+                wsinstances.master = instance
+                break
+            case 'wss://littlebigsnake.com:8443/':
+            case 'wss://littlebigsnake.com:8080/':
+                wsinstances.chat = instance
+                break
+            default:
+                wsinstances.game = instance
+        }
+        instance = new Proxy(instance, {
+            set: (target, key, value, receiver) => {
+
+                if(key == 'onclose'){
+                    value = new Proxy(value,{
+                        apply:(target, thisArg, argumentlist, receiver)=>{
+                            if(thisArg.url == wsinstances.game.url){
+                                serverinfo=''
+                                topplayers=[]
+                            }
+
+                            return target.apply(thisArg, argumentlist)
+                        }
+                    })
+
+                }
+
+                if(key == 'onmessage'){
+                    value = new Proxy(value,{
+                        apply:(target, thisArg, argumentlist, receiver)=>{
+
+
+
+                            target.apply(thisArg, argumentlist)
+                            if(argumentlist[0].data instanceof ArrayBuffer){
+                                //  return  window.process(argumentlist[0].data, thisArg.id)
+                                processCopy(argumentlist[0].data)
+
+                            }
+
+                            return true
+                        }
+                    })
+                }
+                target[key] = value
+                return true
+            },
+            get: (target, key) => {
+                return typeof target[key] == "function" ? target[key].bind(target) : target[key];
+            },
+        })
+        let parts = instance.url.split("/")[2].split(':')
+        if (parts[1] > 9000) {
+            var type = parts[1] == 9001 ? ' : desktop' : ' : mobile'
+            serverinfo = parts[0].split('.')[0].replace('-', ' ') + type
+
+        }
+        instance.send = new Proxy(instance.send, {
+            apply: (target, thisArg, argumentsList) => {
+
+                if(thisArg.binaryType='arraybuffer'){
+                    argumentsList[0]= parseSend(argumentsList[0])
+                }
+                return target.apply(thisArg, argumentsList)
+            }
+        })
+        return instance
+    }
+})
+window.observe = 0
+var toggle_info = false
+var toggle_tocar = false
+/*var serverinfo = document.createElement('div')
+window.serverinfo = serverinfo
+serverinfo.style = 'position:absolute;color:#DCDCDC;text-shadow: 1px 1px black ; top:0;left:200px; margin:auto; padding:20px; display:none;  text-transform: capitalize;background-color: rgba(0, 0, 0, 0.5)'
+document.body.appendChild(serverinfo)*/
+var db, db2;
+var request = indexedDB.open("UnityCache");
+request.onsuccess = function(event) {
+    db = request.result;
+};
+var request2 = indexedDB.open("/idbfs");
+request2.onsuccess = function(event) {
+    db2 = request2.result;
+};
+
+function getData(key) {
+    const txn = db.transaction('XMLHttpRequest', "readonly");
+    const objStore = txn.objectStore('XMLHttpRequest')
+    const consulta = objStore.get(key)
+    consulta.onsuccess = e => {
+        update(consulta.result)
+    }
+}
+
+function update(data) {
+    const objStore = db.transaction(['XMLHttpRequest'], "readwrite").objectStore('XMLHttpRequest');
+    data.xhr.response = skindata.buffer
+    const updateRequest = objStore.put(data)
+    updateRequest.onsuccess = (event) => {
+        console.info('ok')
+    }
+}
+
+function updateCache() {
+    const keysTr = db.transaction('XMLHttpRequest').objectStore('XMLHttpRequest').getAllKeys()
+    keysTr.onsuccess = (event) => {
+        var data = keysTr.result.filter(k => k.indexOf('skins') != -1)
+        if (data.length > 0) {
+            data.forEach(d => getData(d))
+        }
+    }
+}
+
+function remove_records() {
+    try {
+        const keysTr = db2.transaction('FILE_DATA').objectStore('FILE_DATA').getAllKeys()
+        keysTr.onsuccess = (event) => {
+            var data = keysTr.result.filter(f => f.indexOf('skins') !== -1)
+            data.forEach(k => delete_record(k))
+        }
+        setTimeout(APP.reload, 3000)
+    } catch (e) {}
+}
+
+function delete_record(key) {
+    const deletion = db2.transaction(['FILE_DATA'], 'readwrite').objectStore('FILE_DATA').delete(key)
+    deletion.onsuccess = e => {
+        console.info('deletado', key)
+    }
+}
+
+function show_records() {
+    const keysTr = db2.transaction('FILE_DATA').objectStore('FILE_DATA').getAllKeys()
+    keysTr.onsuccess = (event) => {
+        var data = keysTr.result.filter(f => f.indexOf('skins') !== -1)
+        data.forEach(k => console.info(k))
+    }
+}
+var BuildWorker = function(foo) {
+    var str = foo.toString()
+    .match(/^\s*function\s*\(\s*\)\s*\{(([\s\S](?!\}$))*[\s\S])/)[1];
+    return new Worker(window.URL.createObjectURL(
+        new Blob([str], { type: 'text/javascript' })));
+}
+window.ADS = {
+    initAggregator: function() {}
+};
+window.ADS.showVideo = function(a, b) {
+    UnityBridge.call("adsVideoCallback", "complete");
+}
+window.ADS_BANNER = {
+    init: function() {},
+    getStaticBannerTypes: function() {
+        return [];
+    },
+};
+window.TRACKER = {
+    track: function(pEvent, pData) {},
+    setParams: function(pParams) {},
+    trackTiming: function(timingVar, category, value, label) {},
+    setAccountId: function(pAccountId) {},
+    init: function(pPlatform, pSocialId) {}
+};
+window.GA_TRACKER = {
+    gaSendEvent: function() {},
+    gaSendTiming: function() {},
+    setAccountId: function(id) {}
+}
+
+class DataWriter {
+    constructor(tipo) {
+        this.data = [0, 0]
+        this.int8(tipo)
+    }
+    int32(value) {
+        this.data.push((value & 0xFF000000) >> 24)
+        this.data.push((value & 0x00FF0000) >> 16)
+        this.data.push((value & 0x0000FF00) >> 8)
+        this.data.push((value & 0x000000FF))
+    }
+    int16(value) {
+        this.data.push((value & 0x0000FF00) >> 8)
+        this.data.push((value & 0x000000FF))
+    }
+    int8(value) {
+        this.data.push(value)
+    }
+    setString(string) {
+        var enc = new TextEncoder().encode(string)
+        var length = enc.length
+        this.data.push((length & 0x0000FF00) >> 8)
+        this.data.push((length & 0x000000FF))
+        enc.forEach(b => this.data.push(b))
+    }
+    get arrayData() {
+        var length = this.data.length
+        this.data[0] = (length & 0x0000FF00) >> 8
+        this.data[1] = (length & 0x000000FF)
+        return Uint8Array.from(this.data)
+    }
+}
+
+window.DataWriter = DataWriter
+window.sendMaster = (array)=>{
+    wsinstances.master.send(Uint8Array.from(array))
+}
+
+window.inserePacote = (byteArray, id)=>{
+    var buffer = UnityBridge.unityInstance.Module._malloc(byteArray.length);
+    UnityBridge.unityInstance.Module.HEAPU8.set(byteArray, buffer);
+    UnityBridge.unityInstance.Module["dynCall_viii"].apply(null, [onbinary, id, buffer, byteArray.length])
+    UnityBridge.unityInstance.Module._free(buffer)
+}
+
+
+function changeObserver(index) {
+    var game = wsinstances.game
+    var a = new DataWriter(9)
+    a.int16(index)
+    game.send(a.arrayData)
+}
+
+function observar(number) {
+    var master = wsinstances.master
+    var w = new DataWriter(171)
+    w.int8(36)
+    w.int32(number)
+    w.int8(0)
+    window.observe = number
+    master.send(w.arrayData)
+};
+const tocir = {
+    x: 0,
+    y: 0,
+}
+let distanceFromCenter= 0
+const center={x:0, y:0}
+document.addEventListener("mousemove", logKey);
+function logKey(e) {
+    center.x = window.innerWidth/2
+    center.y = window.innerHeight/2
+
+    distanceFromCenter = distance(e.clientX, e.clientY, center.x, center.y)
+}
+window.moveto = function moveto(x, y){
+    var m = new DataWriter(11)
+    m.int16(4)
+    m.int16(0)
+    m.int16(x)
+    m.int16(y)
+    return m.arrayData
+
+}
+window.moveto2 = function moveto(x, y){
+    var m = new DataWriter(11)
+    m.int16(4)
+    m.int16(0)
+    m.int16(x)
+    m.int16(y)
+    let g = wsinstances.game
+    g.send( m.arrayData)
+
+}
+
+function distance(x1, y1, x2, y2) {
+    return Math.sqrt(Math.pow(x1 - x2, 2) + Math.pow(y1 - y2, 2));
+}
+var arr=[]
+var arr2=[]
+const parseSend = function(buff) {
+    if (buff[2] == 5) {
+        if (window.observe > 0) {
+            let n = window.observe
+            var x = new Uint8Array(Uint32Array.from([n]).buffer)
+            buff[3] = x[3]
+            buff[4] = x[2]
+            buff[5] = x[1]
+            buff[6] = x[0]
+            window.observe = 0
+        }
+
+
+    }
+    if(buff[2]==4){
+        //   console.log('CS_CLIENT_REMathADY\n'+buff.join(',') + '\n')
+    }
+    if(buff[2]==11){
+
+        var acelerando = buff[4] == 17
+        var angle = (buff[3] / 256) * Math.PI * 2;
+        var cos = Math.cos(angle)
+        var sin = Math.sin(angle)
+
+        const L = 2000
+        let x1 = mypos.x + (L * cos )
+        let y1 = mypos.y + (L * sin )
+        let x2 = mypos.x + (L+100 * cos)
+        let y2 = mypos.y + (L+100 * sin)
+
+        arr = [0 ,7  ,11 ,0 ,2   ,11 ,217 ,
+               0 ,11 ,11 ,0 ,132 ,11 ,217 ,0 ,0 ,0 ,0 ,
+               0 ,11 ,11 ,0 ,132 ,0  ,66  ,0 ,0 ,0 ,0 ]
+        arr[14] = (x1 & 0x0000FF00) >> 8
+        arr[15] = x1 & 0x000000FF
+        arr[16] = (y1 & 0x0000FF00) >> 8
+        arr[17] = y1 & 0x000000FF
+        arr[25] = (x2 & 0x0000FF00) >> 8
+        arr[26] = x2 & 0x000000FF
+        arr[27] = (y2 & 0x0000FF00) >> 8
+        arr[28] = y2 & 0x000000FF
+
+
+
+        if(toggle_tocar){
+            if(acelerando){
+                buff = Uint8Array.from( arr)
+            }else{
+                arr2 = [0 ,7 ,11 ,0 ,2 ,11 ,217 ,0 ,11 ,11 ,0 ,132 ,11 ,217 ,0 ,0 ,0 ,0  ]
+                arr2[14] = (x1 & 0x0000FF00) >> 8
+                arr2[15] = x1 & 0x000000FF
+                arr2[16] = (y1 & 0x0000FF00) >> 8
+                arr2[17] = y1 & 0x000000FF
+                buff= Uint8Array.from( arr2)
+            }
+        }
+
+    }
+
+    if (buff[2] == 100) {
+        if (window.GM_config.get('server_type') == "Mobile") {
+            buff[5] = 3
+        }
+    }
+    // console.log('SEND:\n',buff.join(','),'\n')
+    return buff
+}
+
+var worker = BuildWorker(function() {
+    var refself = self
+    refself.mysnake = {}
+    refself.snakes =[]
+
+
+    class Snake {
+
+        constructor(r,inicio, fim) {
+            this.inicio = inicio
+            this.fim = fim
+            this.#initialize(r)
+        }
+
+
+        #initialize(r) {
+            this.id = r.int16()
+            this.skin_index = r.int8()
+            this.flagId = r.int8()
+            this.rank = r.int8()
+            this.playerName = r.getString()
+            this.mass = r.int32()
+            this.crowns = r.int8()
+            this.posx = r.int16()
+            this.posy = r.int16()
+            this.rotation = r.int8()
+            this.heading = r.int8()
+            this.speedData = r.int16()
+            this.lair = r.int8()
+            this.stop = r.int8()
+            this.bonus_boost = r.int8()
+            this.water_boost = r.int8()
+            this.pointCount = r.int16()
+            this.pointsX = []
+            this.pointsY = []
+            for (let i = 0; i < this.pointCount; i++) {
+                this.pointsX[i] = r.int8();
+                this.pointsY[i] = r.int8();
+
+            }
+            this.flags = r.int8()
+            if(this.flags == 1 || this.flags == 5){
+                // console.log(`ADD SNAKE\n${this.playerName}\n`,this.flags,r.data.slice(r.offset, this.fim).join(',') + '\n')
+            }
+
+            if (this.flags == 1) {
+
+                this.firstLife = r.int8()
+
+
+                //this.viewScaleFactor = r.float()
+                //this.energyChargeRate = r.float()
+            }
+
+            this.isPlayer = this.flags==1
+
+
+
+        }
+    }
+
+
+    class Reader {
+        constructor(data, id) {
+
+            this.id = id
+            this.data = data
+            this.offset = 0
+        }
+
+        int16() {
+            return (this.data[this.offset++] & 0xFF) << 8 | (this.data[this.offset++] & 0xFF) << 0
+
+        }
+        int32() {
+            return (this.data[this.offset++] & 255) << 24 |
+                (this.data[this.offset++] & 255) << 16 |
+                (this.data[this.offset++] & 255) << 8 |
+                this.data[this.offset++] & 255
+        }
+
+        int8() {
+            return this.data[this.offset++]
+        }
+        float() {
+            //console.log(`[${this.data[this.offset]}, ${this.data[this.offset+1]}, ${this.data[this.offset+2]}, ${this.data[this.offset+3]}]`)
+            let arr = new Float32Array(Uint8Array.from(
+                [
+                    this.data[this.offset++],
+                    this.data[this.offset++],
+                    this.data[this.offset++],
+                    this.data[this.offset++]
+                ].reverse()
+            ).buffer)
+            return arr[0]
+
+        }
+        get end() {
+            return this.offset == this.data.length;
+        }
+        zerar() {
+            // errado
+            this.data[2] = 0
+        }
+        display(tag=''){
+            console.log(`%c${tag}\n${this.data.join(',')}\n`, 'color:DodgerBlue')
+        }
+        getString() {
+            var len = this.int16()
+            var string = new TextDecoder().decode(Uint8Array.from( this.data.slice(this.offset, this.offset + len)))
+            this.offset += len
+            //console.log(this.offset)
+            return string
+        }
+        send() {
+            //  self.postMessage({ msg: 0, byteArray: this.data,id: this.id })
+        }
+
+    }
+
+    const constants ={
+        chests : [
+            "NONE",
+            "Bau Madeira",
+            "Bau Ferro",
+            "Bau Ouro",
+            "Bau Rubi",
+            "Bau ROYAL",
+            "XP",
+            "Ouro",
+            "Rubi",
+            "Comum",
+            "Rara",
+            "Epica",
+        ],
+        skills : ['ENTOMOPHAGOUS',
+                  'ENTOMOLOGIST_BOOK',
+                  'METABOLISM',
+                  'EATER_BOOK',
+                  'MAGNETISM',
+                  'ATTRACTION_BOOK',
+                  'VIEW',
+                  'VIEWER_BOOK',
+                  'ENERGY',
+                  'LIGHTNING_BOOK'],
+        offers:[
+            {
+                "enabled": true,
+                "id": 20,
+                "title": {
+                    "ru": "Премиальный старт",
+                    "en": "Premium Start"
+                },
+                "count": 1,
+                "gold": 5600,
+                "diamonds": 800,
+                "exp": 0,
+                "premium": 0,
+                "ordinary": 0,
+                "rare": 0,
+                "epic": 2,
+                "currency": { "prices": [ 1.99, 1.99, 0.99 ], "votes": 22 },
+                "discount": 80.1,
+                "discountVk": 80.0,
+                "requiredId": 0,
+                "duration": 1,
+                "cooldown": 3,
+                "weight": 100,
+                "promo": false,
+                "promoSkin": 0
+            },
+            {
+                "enabled": true,
+                "id": 21,
+                "title": { "ru": "Набор сталкера", "en": "Stalker's Set" },
+                "count": 1,
+                "gold": 17000,
+                "diamonds": 0,
+                "exp": 0,
+                "premium": 7,
+                "ordinary": 2,
+                "rare": 2,
+                "epic": 1,
+                "currency": { "prices": [ 3.99, 2.99, 1.99 ], "votes": 45 },
+                "discount": 71.5,
+                "discountVk": 70.78,
+                "requiredId": 20,
+                "duration": 1,
+                "cooldown": 3,
+                "weight": 100,
+                "promo": false,
+                "promoSkin": 0
+            },
+            {
+                "enabled": true,
+                "id": 22,
+                "title": {
+                    "ru": "Неделя приключений",
+                    "en": "Adventures week"
+                },
+                "count": 1,
+                "gold": 20000,
+                "diamonds": 2500,
+                "exp": 0,
+                "premium": 7,
+                "ordinary": 0,
+                "rare": 0,
+                "epic": 0,
+                "currency": { "prices": [ 5.99, 4.99, 2.99 ], "votes": 67 },
+                "discount": 75.04,
+                "discountVk": 74.81,
+                "requiredId": 21,
+                "duration": 1,
+                "cooldown": 3,
+                "weight": 100,
+                "promo": false,
+                "promoSkin": 0
+            },
+            {
+                "enabled": true,
+                "id": 23,
+                "title": { "ru": "Элитный пакет", "en": "Elite Pack" },
+                "count": 1,
+                "gold": 18000,
+                "diamonds": 2000,
+                "exp": 0,
+                "premium": 30,
+                "ordinary": 0,
+                "rare": 0,
+                "epic": 0,
+                "currency": { "prices": [ 5.99, 4.99, 2.99 ], "votes": 67 },
+                "discount": 75.04,
+                "discountVk": 75.19,
+                "requiredId": 22,
+                "duration": 1,
+                "cooldown": 3,
+                "weight": 100,
+                "promo": false,
+                "promoSkin": 0
+            },
+            {
+                "enabled": true,
+                "id": 24,
+                "title": { "ru": "Набор Победителя", "en": "Winner's Set" },
+                "count": 1,
+                "gold": 6000,
+                "diamonds": 0,
+                "exp": 25000,
+                "premium": 30,
+                "ordinary": 4,
+                "rare": 3,
+                "epic": 3,
+                "currency": { "prices": [ 9.99, 7.99, 4.99 ], "votes": 112 },
+                "discount": 80.02,
+                "discountVk": 80.11,
+                "requiredId": 0,
+                "duration": 1,
+                "cooldown": 3,
+                "weight": 100,
+                "promo": false,
+                "promoSkin": 0
+            },
+            {
+                "enabled": true,
+                "id": 25,
+                "title": {
+                    "ru": "Пещерная распродажа",
+                    "en": "Cave Sale"
+                },
+                "count": 1,
+                "gold": 6000,
+                "diamonds": 2000,
+                "exp": 20000,
+                "premium": 0,
+                "ordinary": 0,
+                "rare": 0,
+                "epic": 0,
+                "currency": { "prices": [ 9.99, 7.99, 4.99 ], "votes": 112 },
+                "discount": 77.8,
+                "discountVk": 77.87,
+                "requiredId": 24,
+                "duration": 1,
+                "cooldown": 5,
+                "weight": 100,
+                "promo": false,
+                "promoSkin": 0
+            },
+            {
+                "enabled": true,
+                "id": 26,
+                "title": {
+                    "ru": "Рубиновая распродажа",
+                    "en": "Ruby Sale"
+                },
+                "count": 1,
+                "gold": 0,
+                "diamonds": 8000,
+                "exp": 20000,
+                "premium": 0,
+                "ordinary": 0,
+                "rare": 0,
+                "epic": 0,
+                "currency": { "prices": [ 9.99, 7.99, 4.99 ], "votes": 112 },
+                "discount": 77.8,
+                "discountVk": 77.87,
+                "requiredId": 24,
+                "duration": 1,
+                "cooldown": 5,
+                "weight": 100,
+                "promo": false,
+                "promoSkin": 0
+            },
+            {
+                "enabled": true,
+                "id": 27,
+                "title": { "ru": "Неделя премиума", "en": "Premium Week" },
+                "count": 10,
+                "gold": 3200,
+                "diamonds": 400,
+                "exp": 0,
+                "premium": 7,
+                "ordinary": 0,
+                "rare": 0,
+                "epic": 0,
+                "currency": { "prices": [ 1.99, 1.99, 0.99 ], "votes": 22 },
+                "discount": 60.2,
+                "discountVk": 59.26,
+                "requiredId": 0,
+                "duration": 1,
+                "cooldown": 7,
+                "weight": 10,
+                "promo": false,
+                "promoSkin": 0
+            },
+            {
+                "enabled": true,
+                "id": 28,
+                "title": { "ru": "Месяц премиума", "en": "Premium Month" },
+                "count": 10,
+                "gold": 5000,
+                "diamonds": 0,
+                "exp": 4000,
+                "premium": 30,
+                "ordinary": 0,
+                "rare": 0,
+                "epic": 0,
+                "currency": { "prices": [ 3.99, 3.99, 1.99 ], "votes": 45 },
+                "discount": 55.67,
+                "discountVk": 53.13,
+                "requiredId": 0,
+                "duration": 1,
+                "cooldown": 7,
+                "weight": 10,
+                "promo": false,
+                "promoSkin": 0
+            },
+            {
+                "enabled": true,
+                "id": 29,
+                "title": { "ru": "Рубиновый клад", "en": "Ruby Treasure" },
+                "count": 10,
+                "gold": 0,
+                "diamonds": 2500,
+                "exp": 2000,
+                "premium": 0,
+                "ordinary": 0,
+                "rare": 1,
+                "epic": 1,
+                "currency": { "prices": [ 5.99, 4.99, 2.99 ], "votes": 67 },
+                "discount": 60.07,
+                "discountVk": 61.05,
+                "requiredId": 0,
+                "duration": 1,
+                "cooldown": 7,
+                "weight": 10,
+                "promo": false,
+                "promoSkin": 0
+            },
+            {
+                "enabled": true,
+                "id": 30,
+                "title": { "ru": "Золотой клад", "en": "Gold Treasure" },
+                "count": 10,
+                "gold": 25000,
+                "diamonds": 0,
+                "exp": 2500,
+                "premium": 0,
+                "ordinary": 1,
+                "rare": 0,
+                "epic": 0,
+                "currency": { "prices": [ 5.99, 4.99, 2.99 ], "votes": 67 },
+                "discount": 57.21,
+                "discountVk": 56.21,
+                "requiredId": 0,
+                "duration": 1,
+                "cooldown": 7,
+                "weight": 10,
+                "promo": false,
+                "promoSkin": 0
+            },
+            {
+                "enabled": true,
+                "id": 31,
+                "title": {
+                    "ru": "Рубиновый клондайк",
+                    "en": "Ruby Klondike"
+                },
+                "count": 10,
+                "gold": 4500,
+                "diamonds": 3000,
+                "exp": 4000,
+                "premium": 0,
+                "ordinary": 0,
+                "rare": 0,
+                "epic": 0,
+                "currency": { "prices": [ 7.99, 5.99, 3.99 ], "votes": 90 },
+                "discount": 55.61,
+                "discountVk": 56.1,
+                "requiredId": 0,
+                "duration": 1,
+                "cooldown": 7,
+                "weight": 10,
+                "promo": false,
+                "promoSkin": 0
+            },
+            {
+                "enabled": true,
+                "id": 32,
+                "title": { "ru": "Эльдорадо", "en": "Eldorado" },
+                "count": 10,
+                "gold": 30000,
+                "diamonds": 1100,
+                "exp": 5000,
+                "premium": 0,
+                "ordinary": 0,
+                "rare": 0,
+                "epic": 0,
+                "currency": { "prices": [ 9.99, 7.99, 4.99 ], "votes": 112 },
+                "discount": 54.59,
+                "discountVk": 54.29,
+                "requiredId": 0,
+                "duration": 1,
+                "cooldown": 7,
+                "weight": 10,
+                "promo": false,
+                "promoSkin": 0
+            },
+            {
+                "enabled": false,
+                "id": 100,
+                "title": {
+                    "ru": "Сезонное предложение",
+                    "en": "Seasonal offer"
+                },
+                "count": 100,
+                "gold": 0,
+                "diamonds": 1250,
+                "exp": 0,
+                "premium": 30,
+                "ordinary": 0,
+                "rare": 0,
+                "epic": 0,
+                "currency": { "prices": [ 4.99, 3.99, 2.99 ], "votes": 56 },
+                "discount": 70.65,
+                "discountVk": 69.89,
+                "requiredId": 0,
+                "duration": 7,
+                "cooldown": 30,
+                "weight": 10000,
+                "promo": true,
+                "promoSkin": 110
+            }
+        ]
+    }
+
+
+    class Account {
+        constructor(r) {
+            this.lastType = r.int8()
+            this.name = r.getString()
+            this.level = r.int16()
+            this.skin_id = r.int8()
+            this.flag_id = r.int8()
+            this.experience = r.int32();
+            this.gold = r.int32();
+            this.diamonds = r.int32();
+            this.chest_crowns = r.int8();
+            this.rating = r.int32();
+            this.rankIndex = r.int8();
+            this.priceRegion = r.int8();
+            this.subscription = r.int8();
+            this.had_trial = r.int8();
+            this.newbie = r.int8();
+            this.registered = r.int8();
+            this.tester = r.int8();
+            this.first_login = r.int8();
+            this.buffs = r.int8();
+            this.cards = r.int8();
+            this.everPlayedJuja = r.int8();
+            this.chestTrack = r.int8();
+            this.chestProgress = r.int8();
+            this.x = r.int16()
+            //this.keys = r.int8()
+            this.totkeys = r.int8()
+            this.chests = []
+            var chestsize = r.int8()
+            for (let i = 0; i < chestsize; i++) {
+                this.chests.push(constants.chests[r.int8()])
+            }
+            this.royal_chest_type = r.int8(); //nao sei
+            this.royal_chest_time = r.int32();
+            this.premium_time = r.int32();
+            this.subscription_time = r.int32();
+            this.subscriptionid = r.getString();
+            this.skills = []
+            for (let i = 0; i < 10; i++) {
+                this.skills.push({ type: constants.skills[i], level: r.int8() })
+            }
+            const partial_skin_count = r.int8();
+            this.partial_skins = []
+            for (let i = 0; i < partial_skin_count; i++) {
+                const id = r.int8()
+                //const skin = constants.skins.find(s => s.id == id).name
+                const skin=''
+                this.partial_skins.push(
+                    { id, parts: r.int16(), skin }
+                )
+
+
+            }
+            this.skincount = r.int8()
+            this.owned_skins = []
+            for (let i = 0; i < this.skincount; i++) {
+                let id = r.int8()
+                // let name = constants.skins.find(s => s.id == id).name
+                const name = ''
+                this.owned_skins.push(
+                    { id, name }
+
+                )
+            } this.achievements = []
+
+            const achievement_count = r.int8()
+            for (let i = 0; i < achievement_count; i++) {
+                const id = r.int8()
+                // read ache by id
+                const ach = {
+
+                    type:0,
+                    counter: r.int16(),
+                    level: r.int8(),
+                    pickedLevel: r.int8()
+                }
+                this.achievements.push(ach)
+
+            }
+            this.achievementGold = r.int8()
+            this.achievementRating = r.int8()
+            this.crownsSold = r.int8();
+            this.offer_id = r.int8();
+            this.offer_id_offset = r.offset-1
+
+            //   r.data[r.offset-1]=26
+
+
+            this.offer_id > 0 ?  this.offerTitle = constants.offers.find(o => o.id == this.offer_id).title.en : this.offerTitle =''
+
+            this.offertime = r.int32();
+            console.log(this.offer_id,this.offertime )
+            this.newbietime = r.int32();
+            const banner_count = r.int8();
+            this.banners = [];
+            for (var i = 0; i < banner_count; i++) {
+                this.banners.push({
+                    type: r.int8(),
+                    state: r.int8(),
+                });
+            }
+            this.gifttime = r.int32();
+            this.optionsUpdate = r.int8();
+            const smilescount = r.int8();
+            this.smiles = [];
+            for (var i = 0; i < smilescount; i++) {
+                this.smiles.push(r.int8());
+            }
+
+        }
+    }
+
+
+    // onbinary = 5670
+    const parseMessage = (e, id) => {
+        var r = new Reader(e, id)
+        while (!r.end) {
+            var inicio = r.offset
+            var len = r.int16()
+            var next = r.offset + (len - 2)
+            var tipo = r.int8()
+            switch (tipo) {
+                case 172:
+                    break
+                case 116:
+                    var token = r.getString()
+                    self.postMessage({ msg: 116, token:token})
+                    break
+                case 101:
+                    self.postMessage({ msg: 101})
+                    console.log('PROT 101')
+                    break
+                case 15:
+                    var _id = r.int16()
+                    var coord= {x : r.int16(), y : r.int16()}
+                    if(refself.mysnake.id == _id){
+                        self.postMessage({ msg: 15, pos:coord})
+                    }
+                    break
+                case 10:
+                    var snake = new Snake(r,inicio, next)
+                    self.postMessage({ msg: 2, action:1,snake})
+                    if(snake.isPlayer){
+                        refself.mysnake = snake
+                    }
+
+                    //      if(snake.isPlayer || snake.flags == 5)/
+                    //console.log('add snake\n','['+r.data.slice(inicio, next).join(',')+'],')
+
+
+                    break
+                case 22:
+                    var topplayers = [];
+
+                    var count = r.int8();
+                    for (let i = 0; i < count; i++) {
+                        var row = {
+                            place: r.int16(),
+                            name: r.getString(),
+                            mass: r.int32(),
+                            crowns: r.int8(),
+                            skin: r.int8(),
+                            flags: r.int8(),
+                            accountId: r.int32(),
+                            id: r.int16(),
+                        };
+                        if (row.flags == 4 || row.flags==5) {
+                            rebeldeid = row.id;
+                        }
+
+                        topplayers.push(row);
+                    }
+
+                    self.postMessage({ msg: 1,topplayers})
+
+
+                    break
+                case 6:
+                    self.postMessage({ msg: 6})
+                    break
+                case 7:
+                    self.postMessage({ msg: 7})
+                    break
+                case 12:
+                    /*
+          if(r.int16() == refself.mysnake.id){
+              r.sendNow()
+          }*/
+                    break
+
+                case 16:
+                    var id = r.int16()
+
+                    self.postMessage({ msg: 2, action:0,id})
+
+
+                    break
+                case 104:
+                    //          r.display()
+                    //    r.data[r.offset - 1]=0
+                    break
+                case 121:
+                    //  r.display()
+                    break
+                case 19:
+                    /*
+            r.int16()
+          var type=r.int8()
+
+          if ( type == 3 || type == 1  ) {
+
+          //    r.zerar()
+          }*/
+                    break
+                case 106:
+                    // update account
+
+                    var accountdata= r.data.slice(inicio, next)
+                    var c = new Account(r)
+                    // console.log(c)
+                    var offset = c.offer_id_offset
+                    if(c.offer_id !== 26){
+                        self.postMessage({ msg: 106, accountdata:accountdata, offset:offset})
+                    }
+
+                    break
+
+                case 203:
+                    r.display()
+                    break
+                case 17:
+                    /*
+                              r.int16()
+                              r.int16()
+                              r.int8()//hue
+                              //toIntColor(huevalue/256,0.75,1)
+                              //console.log(huevalue, huevalue/256)
+
+                              if ( r.int8() >= 15 ) {
+                                //  r.setint8(r.offset-1, 1)
+
+                              } else {
+                                  r.zerar()
+                              }
+          */
+                    break
+                case 15:
+                    /*
+                    const parts_skip_count = 3
+                    const parts_start_move_count=4
+                    var move = {}
+                    move.id = r.int16()
+                    move.head_x = r.int16();
+                    move.head_y = r.int16();
+                    move.head_rot = r.int8();
+                    move.step_x = r.int16();
+                    move.step_y = r.int16();
+                    move.lair= r.int8();
+                    move.stop= r.int8();
+                    move.bonus_boost = r.int8();
+                    move.water_boost = r.int8();
+                    self.postMessage({ msg: 2, action:2,move})
+*/
+                    break
+            }
+            r.offset = next
+        }
+        //  r.send(id)
+        //   self.postMessage({byteArray:  r.data,id:id, onBinary:onBinary})
+    }
+
+
+    var byteArray
+    self.onmessage = function(e) {
+        byteArray = new Uint8Array(e.data.byteArray)
+        parseMessage(byteArray, self)
+    }
+    //last line of worker
+});
+/****************************************************************************************************************************/
+window.process = function(array, id) {
+
+    worker.postMessage({ byteArray: array }, [array])
+}
+
+var snakes = new Map()
+const partsSkipCount = 3
+const partsStartMoveCount = 4
+const moveSnake = (move)=>{
+    var snake = snakes.get(move.id)
+    var moveCoeff = 0;
+    var moveIndex = 0;
+    if(snake){
+        for(i=0; i < snake.pointCount; i++){
+            var posX=snake.pointsX[i]
+            var posY= snake.pointsY[i]
+            if(i >= partsSkipCount){
+                if(moveIndex < partsStartMoveCount){
+                    moveIndex++
+                    moveCoeff = (0.43 * moveIndex)/ partsStartMoveCount
+                }
+                posX += moveCoeff *  posX
+                posY += moveCoeff * posY
+            }
+            snake.pointsX[i]= posX
+            snake.pointsY[i]= posY
+        }
+
+    }
+
+}
+
+
+worker.onmessage = function(e) {
+
+    switch(e.data.msg){
+        case 6:
+            console.log('inicio do jogo')
+            //snakes.clear()
+            break
+        case 116:
+            //self.postMessage({ msg: 116, token:token})
+            window.open('https://secure.xsolla.com/paystation2/?access_token=' +e.data.token , '_blank');
+            break
+        case 101:
+
+            break
+        case 7:
+            console.log('fim do jogo')
+            toggle_tocar = false
+
+            break
+        case 15:
+            mypos = e.data.pos
+            break
+        case 106:
+            if(window.index == 0){
+                setTimeout(function(){
+                    var value = kmpMatching(new Uint8Array(UnityBridge.unityInstance.Module.HEAPU8.slice(63000000)),[163,2,0,0,143,194,245,59])
+                if(value[0]){
+                    window.index =value[0]+ 63000000
+                }
+
+                }, 2000)
+
+
+            }
+
+            break
+        case 1:
+            topplayers = e.data.topplayers
+            break
+        case 2:
+
+            if(e.data.action==1){
+                var snake = e.data.snake
+                snakes.set(snake.id, snake)
+            }else if(e.data.action==2){
+                //  moveSnake(e.data.move)
+            } else{
+                var id = e.data.id
+                snakes.delete(id)
+            }
+
+            break
+
+    }
+
+
+}
+ // 63449300
+// 63039700 // 63035604
+const DEFAULT_SCALE = 675
+var dv
+var toggle_scale = false
+var toggle_in = false
+var toggle_out = false
+
+function reconnect() {
+    if (wsinstances.master.readyState !== undefined) {
+        wsinstances.master.close()
+        GM_config.close()
+    }
+}
+GM_config.init({
+    'id': 'MyConfig', // The id used for this instance of GM_config
+    title: 'Configurações',
+    'fields': // Fields object
+    {
+        'token_1': // This is the id of the field
+        {
+            'label': 'Token 1', // Appears next to field
+            labelPos: 'left',
+            'type': 'text', // Makes this setting a text field
+            'default': '' // Default value if user doesn't change it
+        },
+        'token_2': // This is the id of the field
+        {
+            'label': 'Token 2', // Appears next to field
+            'type': 'text', // Makes this setting a text field
+            'default': '' // Default value if user doesn't change it
+        },
+        'token_3': {
+            'label': 'Token 3', // Appears next to field
+            'type': 'text', // Makes this setting a text field
+            'default': '' // Default value if user doesn't change it
+        },
+        'server_type': {
+            'id': 'meuid',
+            'options': ['Normal', 'Mobile'],
+            'label': 'tipo Servidor',
+            labelPos: 'left',
+            'type': 'select',
+            'default': 'Normal'
+        },
+        /*'servers': {
+
+            'options': [
+                "eu_Frankfurt",
+                "af_CapeTown",
+                "as_Bangalore",
+                "eu_Milan",
+                "au_Sydney",
+                "sa_SaoPaulo",
+                "eu_London",
+                "eu_Paris",
+                "eu_Amsterdam",
+                "eu_Stockholm",
+                "eu_Moscow",
+                "na_NewYork",
+                "na_Washington",
+                "na_Toronto",
+                "na_Dallas",
+                "na_Chicago",
+                "as_HongKong",
+                "as_Bahrain",
+                "as_Mumbai",
+                "as_Seoul",
+                "as_Singapore",
+                "as_Tokyo",
+            ] ,
+            default: 'sa_SaoPaulo',
+            'label': 'Servidor',
+            labelPos: 'left',
+            'type': 'select',
+
+        },*/
+        idobs2: // This is the id of the field
+        {
+            section: ['', 'Observar por ID:'],
+            label: 'ID', // Appears next to field
+            labelPos: 'left',
+            type: 'int', // Makes this setting a text field
+            size: 10,
+            min: 0,
+            save: false,
+        },
+        Button2: {
+            label: 'Observar ID',
+            type: 'button',
+            size: 100,
+            click: function() {
+                var id = GM_config.fields['idobs2'].toValue()
+                observar(id)
+                GM_config.close()
+            }
+        },
+    },
+    css: 'iframe#MyConfig{width:500px !important; height:400px !important} #MyConfig_resetLink { display: none !important; } #MyConfig_buttons_holder {margin-top:20px; text-align:left !important;} }',
+    events: {
+        init: function() {
+            window.GM_config = GM_config
+
+
+
+        },
+        open: function() {
+
+            this.frame.setAttribute('style', 'inset: 54px auto auto 222px; border: 1px solid rgb(0, 0, 0); height: 40%; margin: 0px; max-height: 40%; max-width: 40%; opacity: 1; overflow: auto; padding: 0px; position: fixed; width: 40%; z-index: 9999; display: block;')
+
+
+        },
+        save: function() {
+            window.ismobile = window.GM_config.get('server_type') == "Mobile"
+            reconnect()
+        }
+    },
+});
+const updateScale = (value) => {
+    try {
+        dv = new DataView(UnityBridge.unityInstance.Module.HEAP8.buffer)
+        dv.setInt32(window.index, value, true)
+    } catch (e) {}
+}
+document.addEventListener('contextmenu', function(ev) {
+    (toggle_scale = !toggle_scale) ? updateScale(900): updateScale(DEFAULT_SCALE)
+    return false;
+}, false);
+document.onkeydown = async (e) => {
+    if (e.keyCode == 192) {
+        ctx.canvas.style.display = (toggle_info = !toggle_info) ? '' : 'none'
+    }
+    if (e.key === 'b') {
+        (toggle_in = !toggle_in) ? updateScale(450): updateScale(DEFAULT_SCALE)
+    }
+
+    if (e.key === 'q') {
+        toggle_tocar = !toggle_tocar
+    }
+    if (e.key === 'n') {
+        updateScale(1500)
+    }
+    if (e.key === "Tab") {
+         if (window.GM_config.isOpen) {
+            window.GM_config.close();
+        } else {
+            window.GM_config.open();
+        }
+        e.preventDefault();
+
+    }
+    if (e.key === "Enter" ) {
+
+
+
+    }
+    if (e.key === 'p' && e.altKey) {}
+    if (e.key === '1' && e.altKey) {
+        let t = GM_config.get('token_1')
+        if (t.trim() !== '') {
+            localStorage.setItem('token', t);
+            APP.reload()
+        }
+        return false;
+    }
+    if (e.key === '2' && e.altKey) {
+        let t = GM_config.get('token_2')
+        if (t.trim() !== '') {
+            localStorage.setItem('token', t);
+            APP.reload()
+        }
+        return false;
+    }
+    if (e.key === 'i' && e.altKey) {
+
+    }
+    if (e.key === '3' && e.altKey) {
+        let t = GM_config.get('token_3')
+        if (t.trim() !== '') {
+            localStorage.setItem('token', t);
+            APP.reload()
+        }
+        return false;
+    }
+}
+
+let maxZoom= 600; //Initial value
+document.addEventListener("wheel", function (e) {
+let zoomVar = e.deltaY;
+
+if (zoomVar > 0) {
+
+  maxZoom += 125; //Zoom increment value
+  updateScale(maxZoom);
+  }
+  else if (zoomVar<0 && maxZoom>400) {
+  maxZoom -= 125; //Zoom reduction value
+  updateScale(maxZoom);
+  }
+
+  });
+
+
+window.wsinstances = wsinstances
+window.utilDecode = str => {
+    console.log(str.match(/.{1,2}/g).map(v => parseInt(v, 16)))
+}
+/*
+function getInstances() {
+    var sockets = {}
+    var instances = UnityBridge.unityInstance.Module.asmLibraryArg["wsinstances"].webSocketInstances
+    for (p in instances) {
+        let socket = instances[p].socketImpl
+        switch (instances[p].socketImpl.url) {
+            case 'wss://master.littlebigsnake.com:8443/':
+                sockets.master = socket
+                break
+            case 'wss://littlebigsnake.com:8443/':
+                sockets.chat = socket
+                break
+            default:
+                sockets.game = socket
+        }
+    }
+    return sockets
+}*/
